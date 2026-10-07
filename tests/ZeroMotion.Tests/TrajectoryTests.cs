@@ -1,0 +1,103 @@
+using System;
+using Xunit;
+using ZeroMotion.Trajectory;
+
+namespace ZeroMotion.Tests
+{
+    public class TrajectoryTests
+    {
+        [Fact]
+        public void TrajectoryPlanner_InterpolatesWaypointsContinuously()
+        {
+            var planner = new TrajectoryPlanner { Profile = TrajectoryProfile.CubicSpline };
+            planner.AddWaypoint(0.0, new float[] { 0f, 0f, 0f });
+            planner.AddWaypoint(1.0, new float[] { 45f, -30f, 90f });
+            planner.AddWaypoint(2.0, new float[] { 90f, 0f, 180f });
+
+            Assert.Equal(3, planner.WaypointCount);
+            Assert.Equal(2.0, planner.TotalDuration);
+
+            // At t = 0
+            var s0 = planner.Evaluate(0.0);
+            Assert.Equal(0f, s0.Positions[0], 2);
+            Assert.Equal(0f, s0.Velocities[0], 2);
+
+            // At t = 1.0 (exact waypoint 1)
+            var s1 = planner.Evaluate(1.0);
+            Assert.Equal(45f, s1.Positions[0], 2);
+            Assert.Equal(-30f, s1.Positions[1], 2);
+            Assert.Equal(90f, s1.Positions[2], 2);
+
+            // At t = 2.0 (end)
+            var sEnd = planner.Evaluate(2.0);
+            Assert.Equal(90f, sEnd.Positions[0], 2);
+            Assert.Equal(0f, sEnd.Velocities[0], 2);
+        }
+
+        [Fact]
+        public void TrajectoryPlanner_QuinticSplineEnsuresSmoothDerivatives()
+        {
+            var planner = new TrajectoryPlanner { Profile = TrajectoryProfile.QuinticSpline };
+            planner.AddWaypoint(0.0, new float[] { 10f, 20f });
+            planner.AddWaypoint(1.0, new float[] { 100f, 200f });
+
+            var s0 = planner.Evaluate(0.0);
+            Assert.Equal(10f, s0.Positions[0], 2);
+            Assert.Equal(0f, s0.Velocities[0], 2);
+            Assert.Equal(0f, s0.Accelerations[0], 2);
+
+            var sMid = planner.Evaluate(0.5);
+            Assert.Equal(55f, sMid.Positions[0], 1); // Exact midpoint by symmetry
+            Assert.True(sMid.Velocities[0] > 0f);
+
+            var s1 = planner.Evaluate(1.0);
+            Assert.Equal(100f, s1.Positions[0], 2);
+            Assert.Equal(0f, s1.Velocities[0], 2);
+            Assert.Equal(0f, s1.Accelerations[0], 2);
+        }
+
+        [Fact]
+        public void SCurvePlanner_RespectsVelocityAndJerkConstraints()
+        {
+            double startPos = 0.0;
+            double targetPos = 500.0; // 500 mm move
+            double maxVel = 200.0;    // 200 mm/s
+            double maxAcc = 500.0;    // 500 mm/s^2
+            double maxJerk = 2000.0;  // 2000 mm/s^3
+
+            var scurve = new SCurvePlanner(startPos, targetPos, maxVel, maxAcc, maxJerk);
+            Assert.True(scurve.TotalDuration > 0.0);
+
+            // Sample across 100 time points
+            int steps = 100;
+            double dt = scurve.TotalDuration / steps;
+
+            double maxObservedVel = 0.0;
+            double maxObservedAcc = 0.0;
+
+            for (int i = 0; i <= steps; i++)
+            {
+                double t = i * dt;
+                var (pos, vel, acc) = scurve.Evaluate(t);
+
+                if (i == 0)
+                {
+                    Assert.Equal(startPos, pos, 2);
+                    Assert.Equal(0.0, vel, 2);
+                }
+                else if (i == steps)
+                {
+                    Assert.Equal(targetPos, pos, 2);
+                    Assert.Equal(0.0, vel, 2);
+                }
+
+                maxObservedVel = System.Math.Max(maxObservedVel, System.Math.Abs(vel));
+                maxObservedAcc = System.Math.Max(maxObservedAcc, System.Math.Abs(acc));
+            }
+
+            // Verify physical constraints
+            Assert.True(maxObservedVel <= maxVel + 1e-3, $"Observed vel {maxObservedVel} exceeded limit {maxVel}");
+            Assert.True(maxObservedAcc <= maxAcc + 1e-3, $"Observed acc {maxObservedAcc} exceeded limit {maxAcc}");
+        }
+    }
+}
