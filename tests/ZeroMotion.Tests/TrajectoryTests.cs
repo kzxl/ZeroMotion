@@ -99,5 +99,59 @@ namespace ZeroMotion.Tests
             Assert.True(maxObservedVel <= maxVel + 1e-3, $"Observed vel {maxObservedVel} exceeded limit {maxVel}");
             Assert.True(maxObservedAcc <= maxAcc + 1e-3, $"Observed acc {maxObservedAcc} exceeded limit {maxAcc}");
         }
+
+        [Fact]
+        public void MultiAxisSCurvePlanner_SynchronizesArrivalTimes()
+        {
+            // 3-axis motion (e.g. X: 300mm, Y: 100mm, Z: 50mm)
+            var start = new double[] { 0, 0, 0 };
+            var target = new double[] { 300, 100, 50 };
+            var maxVel = new double[] { 150, 150, 150 };
+            var maxAcc = new double[] { 400, 400, 400 };
+            var maxJerk = new double[] { 2000, 2000, 2000 };
+
+            var multi = new MultiAxisSCurvePlanner(start, target, maxVel, maxAcc, maxJerk);
+            Assert.True(multi.SynchronizedDuration > 0.0);
+
+            // Sample at completion time
+            var (posEnd, velEnd, accEnd) = multi.Evaluate(multi.SynchronizedDuration);
+            for (int i = 0; i < 3; i++)
+            {
+                Assert.Equal(target[i], posEnd[i], 1);
+                Assert.Equal(0.0, velEnd[i], 1);
+            }
+
+            // Sample halfway: all axes should be in progress
+            var (posMid, velMid, _) = multi.Evaluate(multi.SynchronizedDuration * 0.5);
+            for (int i = 0; i < 3; i++)
+            {
+                Assert.True(posMid[i] > start[i] && posMid[i] < target[i]);
+                Assert.True(velMid[i] > 0.0);
+            }
+        }
+
+        [Fact]
+        public void CartesianTrajectoryPlanner_InterpolatesPositionAndSlerp()
+        {
+            var p0 = new ZeroMotion.Math.Vec3(100f, 200f, 300f);
+            var q0 = ZeroMotion.Math.Quat.Identity;
+            var p1 = new ZeroMotion.Math.Vec3(400f, 200f, 600f);
+            var q1 = ZeroMotion.Math.Quat.FromEuler(0f, (float)System.Math.PI * 0.5f, 0f);
+
+            var planner = new CartesianTrajectoryPlanner(p0, q0, p1, q1, maxLinearVel: 200, maxLinearAcc: 500, maxLinearJerk: 2000);
+            Assert.True(planner.TotalDuration > 0.0);
+            Assert.True(planner.LinearDistance > 0.0);
+
+            // Start
+            var w0 = planner.Evaluate(0.0);
+            Assert.Equal(p0.X, w0.Position.X, 2);
+            Assert.Equal(0.0, w0.Progress, 2);
+
+            // End
+            var wEnd = planner.Evaluate(planner.TotalDuration);
+            Assert.Equal(p1.X, wEnd.Position.X, 2);
+            Assert.Equal(p1.Z, wEnd.Position.Z, 2);
+            Assert.Equal(1.0, wEnd.Progress, 2);
+        }
     }
 }

@@ -69,6 +69,52 @@ for (double t = 0.0; t <= scurve.TotalDuration; t += 0.001)
 }
 ```
 
+### 3. Multi-Axis Synchronized S-Curve Trajectory
+
+```csharp
+using ZeroMotion.Trajectory;
+
+// Synchronizes N axes so all axes start and arrive simultaneously at T_sync
+var multi = new MultiAxisSCurvePlanner(
+    startPositions:    new double[] { 0, 0, 0 },
+    targetPositions:   new double[] { 300, 100, 50 },
+    maxVelocities:     new double[] { 150, 150, 150 },
+    maxAccelerations:  new double[] { 400, 400, 400 },
+    maxJerks:          new double[] { 2000, 2000, 2000 }
+);
+
+var (positions, velocities, accelerations) = multi.Evaluate(t);
+```
+
+### 4. Cartesian Straight-Line (MoveL) & Quaternion SLERP
+
+```csharp
+using ZeroMotion.Trajectory;
+using ZeroMotion.Math;
+
+var planner = new CartesianTrajectoryPlanner(
+    startPos: new Vec3(100f, 200f, 300f),
+    startRot: Quat.Identity,
+    targetPos: new Vec3(400f, 200f, 600f),
+    targetRot: Quat.FromEuler(0f, 1.57f, 0f),
+    maxLinearVel: 250.0, maxLinearAcc: 1000.0, maxLinearJerk: 5000.0
+);
+
+var waypoint = planner.Evaluate(t);
+// waypoint.Position, waypoint.Orientation (SLERP), waypoint.LinearVelocity
+```
+
+### 5. Yoshikawa Manipulability & Damped Least Squares (DLS) IK
+
+```csharp
+// Evaluate distance from kinematic singularities
+float w = robot.ComputeManipulability(jointAngles);
+if (w < 0.01f) Console.WriteLine("Warning: Manipulator near singularity!");
+
+// Singularity-robust differential inverse kinematics
+float[] deltaQ = robot.SolveDampedLeastSquaresIK(jointAngles, deltaLinear, deltaAngular, dampingLambda: 0.05f);
+```
+
 ---
 
 ## 📄 License

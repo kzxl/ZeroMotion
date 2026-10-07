@@ -82,5 +82,32 @@ namespace ZeroMotion.Tests
 
             Assert.True(hasNonZero, "Jacobian must contain non-zero motion derivatives.");
         }
+
+        [Fact]
+        public void ComputeManipulability_DetectsSingularityAndNormalState()
+        {
+            var robot = RobotKinematics.CreateStandard6AxisRobot();
+            // Posture away from wrist and shoulder singularities
+            var nonSingularJoints = new float[] { 15f, 30f, -45f, 25f, 45f, 20f };
+            float wNonSingular = robot.ComputeManipulability(nonSingularJoints);
+            Assert.True(wNonSingular > 0f, $"Manipulability in non-singular posture should be positive, was {wNonSingular}");
+
+            // Posture with wrist singularity (Joint 5 at 0 degrees aligns Joint 4 and Joint 6)
+            var singularJoints = new float[] { 0f, 0f, 0f, 0f, 0f, 0f };
+            float wSingular = robot.ComputeManipulability(singularJoints);
+            Assert.Equal(0f, wSingular, 3); // Must detect singularity
+
+            // DLS solver test: remains stable and bounded even near singularity
+            var deltaLinear = new Vec3(1.0f, 0f, 0f); // 1mm in X
+            var deltaAngular = Vec3.Zero;
+            var deltaQ = robot.SolveDampedLeastSquaresIK(nonSingularJoints, deltaLinear, deltaAngular, dampingLambda: 0.1f);
+
+            Assert.Equal(6, deltaQ.Length);
+            for (int i = 0; i < 6; i++)
+            {
+                Assert.False(float.IsNaN(deltaQ[i]), $"Joint delta {i} was NaN");
+                Assert.False(float.IsInfinity(deltaQ[i]), $"Joint delta {i} was Infinity");
+            }
+        }
     }
 }

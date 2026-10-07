@@ -94,6 +94,185 @@ namespace ZeroMotion.Kinematics
         }
 
         /// <summary>
+        /// Computes Yoshikawa's Manipulability Measure: w = sqrt(det(J * J^T)).
+        /// Units are normalized to SI (meters/radians) to prevent numerical ill-conditioning.
+        /// When w approaches 0, the robot is at or near a kinematic singularity.
+        /// </summary>
+        public float ComputeManipulability(IReadOnlyList<float> jointValues)
+        {
+            float[,] J = ComputeJacobian(jointValues);
+            int n = Links.Count;
+            double[,] A = new double[6, 6];
+
+            for (int r = 0; r < 6; r++)
+            {
+                double scaleR = (r < 3) ? 0.001 : 1.0; // scale mm to meters for linear rows
+                for (int c = 0; c < 6; c++)
+                {
+                    double scaleC = (c < 3) ? 0.001 : 1.0;
+                    double sum = 0.0;
+                    for (int k = 0; k < n; k++)
+                    {
+                        sum += (J[r, k] * scaleR) * (J[c, k] * scaleC);
+                    }
+                    A[r, c] = sum;
+                }
+            }
+
+            double det = ComputeDeterminant6x6(A);
+            return det > 0.0 ? (float)System.Math.Sqrt(det) : 0f;
+        }
+
+        /// <summary>
+        /// Solves differential inverse kinematics using Damped Least Squares (Levenberg-Marquardt):
+        /// delta_q = J^T * (J * J^T + lambda^2 * I)^(-1) * delta_x
+        /// Robust against singularities, preventing joint velocity divergence.
+        /// </summary>
+        public float[] SolveDampedLeastSquaresIK(
+            IReadOnlyList<float> currentJoints,
+            Vec3 targetDeltaLinear,
+            Vec3 targetDeltaAngular,
+            float dampingLambda = 0.05f)
+        {
+            float[,] J = ComputeJacobian(currentJoints);
+            int n = Links.Count;
+
+            // Compute A = J * J^T + lambda^2 * I (6x6) in double precision
+            double[,] A = new double[6, 7]; // augmented with rhs
+            double lambdaSq = (double)dampingLambda * dampingLambda;
+
+            for (int r = 0; r < 6; r++)
+            {
+                for (int c = 0; c < 6; c++)
+                {
+                    double sum = (r == c) ? lambdaSq : 0.0;
+                    for (int k = 0; k < n; k++)
+                    {
+                        sum += (double)J[r, k] * J[c, k];
+                    }
+                    A[r, c] = sum;
+                }
+            }
+
+            // RHS: delta_x = [linear; angular]
+            A[0, 6] = targetDeltaLinear.X;
+            A[1, 6] = targetDeltaLinear.Y;
+            A[2, 6] = targetDeltaLinear.Z;
+            A[3, 6] = targetDeltaAngular.X;
+            A[4, 6] = targetDeltaAngular.Y;
+            A[5, 6] = targetDeltaAngular.Z;
+
+            // Solve (J * J^T + lambda^2 * I) * y = delta_x via Gaussian elimination
+            double[] y = SolveLinearSystem6(A);
+
+            // delta_q = J^T * y
+            float[] deltaQ = new float[n];
+            for (int j = 0; j < n; j++)
+            {
+                double sum = 0.0;
+                for (int r = 0; r < 6; r++)
+                {
+                    sum += (double)J[r, j] * y[r];
+                }
+                deltaQ[j] = (float)sum;
+            }
+
+            return deltaQ;
+        }
+
+        private static double ComputeDeterminant6x6(double[,] m)
+        {
+            double[,] a = (double[,])m.Clone();
+            double det = 1.0;
+
+            for (int i = 0; i < 6; i++)
+            {
+                int pivot = i;
+                for (int j = i + 1; j < 6; j++)
+                {
+                    if (System.Math.Abs(a[j, i]) > System.Math.Abs(a[pivot, i]))
+                    {
+                        pivot = j;
+                    }
+                }
+
+                if (System.Math.Abs(a[pivot, i]) < 1e-15) return 0.0;
+
+                if (pivot != i)
+                {
+                    for (int k = 0; k < 6; k++)
+                    {
+                        double tmp = a[i, k];
+                        a[i, k] = a[pivot, k];
+                        a[pivot, k] = tmp;
+                    }
+                    det = -det;
+                }
+
+                det *= a[i, i];
+
+                for (int j = i + 1; j < 6; j++)
+                {
+                    double factor = a[j, i] / a[i, i];
+                    for (int k = i; k < 6; k++)
+                    {
+                        a[j, k] -= factor * a[i, k];
+                    }
+                }
+            }
+
+            return det;
+        }
+
+        private static double[] SolveLinearSystem6(double[,] a)
+        {
+            for (int i = 0; i < 6; i++)
+            {
+                int pivot = i;
+                for (int j = i + 1; j < 6; j++)
+                {
+                    if (System.Math.Abs(a[j, i]) > System.Math.Abs(a[pivot, i])) pivot = j;
+                }
+
+                if (pivot != i)
+                {
+                    for (int k = 0; k <= 6; k++)
+                    {
+                        double tmp = a[i, k];
+                        a[i, k] = a[pivot, k];
+                        a[pivot, k] = tmp;
+                    }
+                }
+
+                double div = a[i, i];
+                if (System.Math.Abs(div) < 1e-12) div = 1e-12;
+
+                for (int j = i + 1; j < 6; j++)
+                {
+                    double factor = a[j, i] / div;
+                    for (int k = i; k <= 6; k++)
+                    {
+                        a[j, k] -= factor * a[i, k];
+                    }
+                }
+            }
+
+            double[] x = new double[6];
+            for (int i = 5; i >= 0; i--)
+            {
+                double sum = a[i, 6];
+                for (int j = i + 1; j < 6; j++)
+                {
+                    sum -= a[i, j] * x[j];
+                }
+                double div = a[i, i];
+                x[i] = System.Math.Abs(div) > 1e-12 ? sum / div : 0.0;
+            }
+
+            return x;
+        }
+
+        /// <summary>
         /// Creates a standard 6-axis articulated industrial robot manipulator (e.g. FANUC / ABB / KUKA kinematics).
         /// </summary>
         public static RobotKinematics CreateStandard6AxisRobot(float d1 = 400f, float a1 = 150f, float a2 = 450f, float d4 = 400f, float d6 = 100f)
